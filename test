@@ -1,0 +1,170 @@
+package com.fly.sms;
+
+import cn.hutool.crypto.SecureUtil;
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import okhttp3.*;
+import org.apache.dubbo.common.utils.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+
+public class IotCardTest {
+    private final static Logger LOGGER = LoggerFactory.getLogger(IotCardTest.class);
+    private static final String DEFAULT_MEDIA_TYPE = "application/json; charset=utf-8";
+
+    /**
+     * 卡商api接口url
+     */
+    private static String cardApiUrl = "https://www.zwytco.com";
+
+    /**
+     * app id
+     */
+    private static String appId = "";
+
+    /**
+     * app secret
+     */
+    private static String appSecret = "";
+
+    /**
+     * okhttp client
+     */
+    private static OkHttpClient client;
+
+    public static OkHttpClient getInstance() {
+        if (client == null) {
+            synchronized (OkHttpClient.class) {
+                if (client == null) {
+                    client = new OkHttpClient.Builder()
+                            .connectionPool(new ConnectionPool(128, 5, TimeUnit.MINUTES))
+                            .connectTimeout(5, TimeUnit.SECONDS)
+                            .readTimeout(30, TimeUnit.SECONDS)
+                            .build();
+                }
+            }
+        }
+        return client;
+    }
+
+    /**
+     * okhttp post调用
+     * @param url
+     * @param headersParams
+     * @param postBody
+     * @return
+     */
+    public static String doPost(String url,Map<String, String> headersParams,String postBody) {
+        try {
+            MediaType createMediaType = MediaType.parse(DEFAULT_MEDIA_TYPE);
+            Request request;
+            url = cardApiUrl + url;
+            if(StringUtils.isBlank(postBody)){
+                request = new Request.Builder().url(url).post(RequestBody.create(createMediaType,"")).headers(addHeaders(headersParams)).build();
+            }else{
+                request = new Request.Builder().url(url).post(RequestBody.create(createMediaType, postBody)).headers(addHeaders(headersParams)).build();
+            }
+            Response response = getInstance().newCall(request).execute();
+            String result;
+            ResponseBody body = response.body();
+            if (body != null) {
+                result = body.string();
+            } else {
+                throw new IOException("exception in OkHttpUtil,response body is null");
+            }
+            JSONObject resultJsonObject = JSONObject.parseObject(result);
+            Integer code = resultJsonObject.getInteger("code");
+            if(null != code && code.intValue() == 0){
+                LOGGER.info("iot card 调用三方成功,url:{},postBody:{},msg:{}",url,postBody,result);
+                return resultJsonObject.getString("data");
+            }
+            LOGGER.error("iot card 调用三方失败,url:{},postBody:{},msg:{}",url,postBody,result);
+        } catch (Exception ex) {
+            LOGGER.error("iot card doPost error,url:{},postBody:{}",url,postBody,ex);
+        }
+        return null;
+    }
+
+    public static Headers addHeaders(Map<String, String> headersParams) {
+        Headers headers = null;
+        okhttp3.Headers.Builder headersbuilder = new okhttp3.Headers.Builder();
+        if (null != headersParams && !headersParams.isEmpty()) {
+            headersParams.put("Content-Type","application/json");
+            Iterator<String> iterator = headersParams.keySet().iterator();
+            String key = "";
+            while (iterator.hasNext()) {
+                key = iterator.next().toString();
+                headersbuilder.add(key, headersParams.get(key));
+            }
+        }
+        headers = headersbuilder.build();
+        return headers;
+    }
+
+    /**
+     * 获取token参数
+     * @return
+     */
+    public static String getToken(){
+        long time = System.currentTimeMillis();
+        String str = String.format("appId=%s&appSecurity=%s&timestamp=%s",appId,appSecret,time);
+        String sign = SecureUtil.md5(str);
+        Map<String, String> headersParams = new HashMap<>();
+        headersParams.put("timestamp",time+"");
+        headersParams.put("appId",appId);
+        headersParams.put("sign",sign);
+        String result = doPost("/japi/japi/V1.1/api/token/getToken",headersParams,null);
+        if(null != result){
+            JSONObject jsonObject = JSON.parseObject(result);
+            String token = jsonObject.getString("token");
+            LOGGER.info("iot card get token success,token:{}",token);
+            return token;
+        }
+        LOGGER.info("iot card get token fail");
+        return null;
+    }
+
+    /**
+     * 获取电子卡信息
+     * @param iccidList
+     */
+    public static void getCardActiveTimeList(List<String> iccidList){
+        Map<String, String> headersParams = new HashMap<>();
+        headersParams.put("japi-token",getToken());
+        JSONObject paramJsonObject = new JSONObject();
+        paramJsonObject.put("iccids",iccidList);
+        String result = doPost("/japi/iot-japi/V1.1/baseData/getCardActiveTimeList",headersParams,paramJsonObject.toJSONString());
+        if(null != result){
+            JSONArray jsonArray = JSON.parseArray(result);
+            if(null != jsonArray && jsonArray.size() > 0){
+                for(int i=0;i<jsonArray.size();i++){
+                    String iccid = jsonArray.getJSONObject(i).getString("iccid");
+                    Date activeTime = jsonArray.getJSONObject(i).getDate("activeTime");
+                    Date expireTime = jsonArray.getJSONObject(i).getDate("expireTime");
+                    LOGGER.info("iot card getCardActiveTimeList success,iccid:{} activeTime:{} expireTime:{}",iccid,activeTime,expireTime);
+                }
+            }
+        }
+
+    }
+
+    public static void main(String[] args) {
+        //appId=xxxxxx&appSecurity=xxxxxx&timestamp=xxxxxx
+//        long time = System.currentTimeMillis();
+//        String str = String.format("appId=%s&appSecurity=%s&%s",appId,appSecret,time);
+//        String sign = SecureUtil.md5(str);
+//        System.out.println(sign);
+
+//        getToken();
+        List<String> iccidList = new ArrayList<>();
+        iccidList.add("89860425101970870278");
+        getCardActiveTimeList(iccidList);
+
+    }
+
+}
